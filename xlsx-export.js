@@ -101,9 +101,12 @@
     const taskLabel = service => service.task === "Otros" ? (service.taskOther || "Otros") : (service.task || service.route || "");
     const rowData = [];
     for (const record of records) {
-      rowData.push({ record, service: record, line: 1, notes: record.notes });
       const extras = Array.isArray(record.services) ? record.services : (record.extraService ? [record.extraService] : []);
-      extras.forEach((service, index) => rowData.push({ record, service, line: index + 2, notes: "" }));
+      if (record.task === "Varios" && extras.length) {
+        extras.forEach((service, index) => rowData.push({ record, service, line: index + 1, notes: index === 0 ? record.notes : "" }));
+      } else {
+        rowData.push({ record, service: record, line: 1, notes: record.notes });
+      }
     }
     const rows = rowData.map(({ record, service, line, notes }, index) => {
       const n = index + 2;

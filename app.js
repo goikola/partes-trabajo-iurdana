@@ -132,8 +132,22 @@
     return Number(end) - Number(start);
   }
   function refreshCalculations() {
-    $("duration").textContent = durationLabel(fields.startTime.value, fields.endTime.value);
-    const distance = distanceValue(fields.startKm.value, fields.endKm.value);
+    let startTime = fields.startTime.value;
+    let endTime = fields.endTime.value;
+    let distance = distanceValue(fields.startKm.value, fields.endKm.value);
+    if (fields.task.value === "Varios") {
+      const lines = serviceLines();
+      startTime = lines[0]?.querySelector(".service-start-time").value || "";
+      endTime = lines.at(-1)?.querySelector(".service-end-time").value || "";
+      const distances = lines.map(line => distanceValue(
+        line.querySelector(".service-start-km").value,
+        line.querySelector(".service-end-km").value
+      ));
+      distance = distances.length && distances.every(value => value !== null)
+        ? distances.reduce((total, value) => total + value, 0)
+        : null;
+    }
+    $("duration").textContent = durationLabel(startTime, endTime);
     $("distance").textContent = distance === null ? "—" : `${distance.toLocaleString("es-ES")} km`;
     $("distance").style.color = distance !== null && distance < 0 ? "#a61b1b" : "";
   }
@@ -201,6 +215,7 @@
     const distanceBox = line.querySelector(".service-distance");
     distanceBox.textContent = distance === null ? "—" : `${distance.toLocaleString("es-ES")} km`;
     distanceBox.style.color = distance !== null && distance < 0 ? "#a61b1b" : "";
+    refreshCalculations();
   }
   function readServiceLine(line) {
     const task = line.querySelector(".service-task").value;
@@ -231,6 +246,7 @@
       line.remove();
       if (!serviceLines().length && fields.task.value === "Varios") createServiceLine();
       renumberServiceLines();
+      refreshCalculations();
     });
     $("serviceLines").append(line);
     updateServiceTaskOther(line);
@@ -314,6 +330,8 @@
     if (admin && !adminUnlocked) $("adminUser").focus();
   }
   function currentRecord() {
+    const multiple = fields.task.value === "Varios";
+    const services = multiple ? serviceLines().map(readServiceLine) : [];
     return {
       id: fields.id.value || (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`),
       date: fields.date.value,
@@ -321,19 +339,19 @@
       vehicle: fields.vehicle.value,
       task: fields.task.value,
       taskOther: fields.task.value === "Otros" ? fields.taskOther.value.trim() : "",
-      startTime: fields.startTime.value,
-      endTime: fields.endTime.value,
-      startKm: Number(fields.startKm.value),
-      endKm: Number(fields.endKm.value),
-      services: fields.task.value === "Varios" ? serviceLines().map(readServiceLine) : [],
+      startTime: multiple ? (services[0]?.startTime || "") : fields.startTime.value,
+      endTime: multiple ? (services.at(-1)?.endTime || "") : fields.endTime.value,
+      startKm: multiple ? null : Number(fields.startKm.value),
+      endKm: multiple ? null : Number(fields.endKm.value),
+      services,
       notes: fields.notes.value.trim(),
       updatedAt: new Date().toISOString()
     };
   }
   function validateRecord(record) {
     if (record.task === "Otros" && !record.taskOther) return "Especifica la tarea en el campo Otros.";
-    if (record.endKm < record.startKm) return "Los kilómetros finales no pueden ser menores que los iniciales.";
-    if (minutesBetween(record.startTime, record.endTime) === 0) return "La hora de inicio y la hora de fin no pueden ser iguales.";
+    if (record.task !== "Varios" && record.endKm < record.startKm) return "Los kilómetros finales no pueden ser menores que los iniciales.";
+    if (record.task !== "Varios" && minutesBetween(record.startTime, record.endTime) === 0) return "La hora de inicio y la hora de fin no pueden ser iguales.";
     if (record.task === "Varios" && !record.services.length) return "Añade al menos una línea de servicio.";
     for (let index = 0; index < record.services.length; index++) {
       const service = record.services[index];
@@ -393,9 +411,11 @@
   async function shareRecord(id) {
     const r = readRecords().find(item => item.id === id);
     if (!r) return;
-    const distance = r.endKm - r.startKm;
-    let text = `Parte ${formatDate(r.date)}\n${r.worker}\n${r.vehicle}\nTarea: ${taskLabel(r)}\n${r.startTime}–${r.endTime} (${durationLabel(r.startTime, r.endTime)})\n${distance} km`;
     const extras = Array.isArray(r.services) ? r.services : (r.extraService ? [r.extraService] : []);
+    const distance = r.task === "Varios"
+      ? extras.reduce((total, service) => total + (service.endKm - service.startKm), 0)
+      : r.endKm - r.startKm;
+    let text = `Parte ${formatDate(r.date)}\n${r.worker}\n${r.vehicle}\nTarea: ${taskLabel(r)}\n${r.startTime}–${r.endTime} (${durationLabel(r.startTime, r.endTime)})\n${distance} km`;
     extras.forEach((service, index) => {
       text += `\n\nServicio adicional ${index + 1}\n${service.vehicle}\nTarea: ${taskLabel(service)}\n${service.startTime}–${service.endTime} (${durationLabel(service.startTime, service.endTime)})\n${service.endKm - service.startKm} km`;
     });
@@ -423,8 +443,11 @@
       card.querySelector(".record-task").textContent = `Tarea: ${taskLabel(record)}`;
       card.querySelector(".record-time").textContent = `${record.startTime}–${record.endTime}`;
       card.querySelector(".record-duration").textContent = durationLabel(record.startTime, record.endTime);
-      card.querySelector(".record-km").textContent = `${(record.endKm - record.startKm).toLocaleString("es-ES")} km`;
       const extras = Array.isArray(record.services) ? record.services : (record.extraService ? [record.extraService] : []);
+      const distance = record.task === "Varios"
+        ? extras.reduce((total, service) => total + (service.endKm - service.startKm), 0)
+        : record.endKm - record.startKm;
+      card.querySelector(".record-km").textContent = `${distance.toLocaleString("es-ES")} km`;
       if (extras.length) {
         const extraBox = card.querySelector(".record-extra");
         extraBox.hidden = false;
@@ -458,8 +481,14 @@
   function toggleMultipleService() {
     const show = fields.task.value === "Varios";
     $("multipleService").hidden = !show;
+    document.querySelectorAll(".main-detail-field").forEach(label => { label.hidden = show; });
+    [fields.startTime, fields.endTime, fields.startKm, fields.endKm].forEach(input => {
+      input.required = !show;
+      if (show) input.value = "";
+    });
     if (show && !serviceLines().length) createServiceLine();
     if (!show) $("serviceLines").replaceChildren();
+    refreshCalculations();
   }
 
   initializeAccess();
