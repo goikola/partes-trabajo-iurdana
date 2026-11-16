@@ -336,7 +336,7 @@
       id: fields.id.value || (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`),
       date: fields.date.value,
       worker: fields.worker.value,
-      vehicle: fields.vehicle.value,
+      vehicle: multiple ? "" : fields.vehicle.value,
       task: fields.task.value,
       taskOther: fields.task.value === "Otros" ? fields.taskOther.value.trim() : "",
       startTime: multiple ? (services[0]?.startTime || "") : fields.startTime.value,
@@ -415,7 +415,8 @@
     const distance = r.task === "Varios"
       ? extras.reduce((total, service) => total + (service.endKm - service.startKm), 0)
       : r.endKm - r.startKm;
-    let text = `Parte ${formatDate(r.date)}\n${r.worker}\n${r.vehicle}\nTarea: ${taskLabel(r)}\n${r.startTime}–${r.endTime} (${durationLabel(r.startTime, r.endTime)})\n${distance} km`;
+    const vehicleLabel = r.task === "Varios" ? "Varias matrículas" : r.vehicle;
+    let text = `Parte ${formatDate(r.date)}\n${r.worker}\n${vehicleLabel}\nTarea: ${taskLabel(r)}\n${r.startTime}–${r.endTime} (${durationLabel(r.startTime, r.endTime)})\n${distance} km`;
     extras.forEach((service, index) => {
       text += `\n\nServicio adicional ${index + 1}\n${service.vehicle}\nTarea: ${taskLabel(service)}\n${service.startTime}–${service.endTime} (${durationLabel(service.startTime, service.endTime)})\n${service.endKm - service.startKm} km`;
     });
@@ -439,7 +440,7 @@
       card.dataset.id = record.id;
       card.querySelector(".record-date").textContent = formatDate(record.date);
       card.querySelector(".record-worker").textContent = record.worker;
-      card.querySelector(".record-plate").textContent = record.vehicle;
+      card.querySelector(".record-plate").textContent = record.task === "Varios" ? "Varias matrículas" : record.vehicle;
       card.querySelector(".record-task").textContent = `Tarea: ${taskLabel(record)}`;
       card.querySelector(".record-time").textContent = `${record.startTime}–${record.endTime}`;
       card.querySelector(".record-duration").textContent = durationLabel(record.startTime, record.endTime);
@@ -482,6 +483,8 @@
     const show = fields.task.value === "Varios";
     $("multipleService").hidden = !show;
     document.querySelectorAll(".main-detail-field").forEach(label => { label.hidden = show; });
+    fields.vehicle.required = !show;
+    if (show) fields.vehicle.value = "";
     [fields.startTime, fields.endTime, fields.startKm, fields.endKm].forEach(input => {
       input.required = !show;
       if (show) input.value = "";

@@ -103,19 +103,33 @@
     for (const record of records) {
       const extras = Array.isArray(record.services) ? record.services : (record.extraService ? [record.extraService] : []);
       if (record.task === "Varios" && extras.length) {
-        extras.forEach((service, index) => rowData.push({ record, service, line: index + 1, notes: index === 0 ? record.notes : "" }));
+        const totalKm = extras.reduce((total, service) => total + (service.endKm - service.startKm), 0);
+        rowData.push({
+          record,
+          service: { vehicle: "", task: "Varios", startTime: record.startTime, endTime: record.endTime },
+          line: "RESUMEN",
+          notes: record.notes,
+          summaryDistance: totalKm
+        });
+        extras.forEach((service, index) => rowData.push({ record, service, line: index + 1, notes: "" }));
       } else {
         rowData.push({ record, service: record, line: 1, notes: record.notes });
       }
     }
-    const rows = rowData.map(({ record, service, line, notes }, index) => {
+    const rows = rowData.map(({ record, service, line, notes, summaryDistance }, index) => {
       const n = index + 2;
       const values = [record.date, record.worker, String(line), service.vehicle, taskLabel(service), service.startTime, service.endTime];
       let cells = values.map((value, i) => textCell(`${columnName(i + 1)}${n}`, value)).join("");
       cells += numberCell(`H${n}`, minutesBetween(service.startTime, service.endTime));
-      cells += numberCell(`I${n}`, service.startKm);
-      cells += numberCell(`J${n}`, service.endKm);
-      cells += numberCell(`K${n}`, service.endKm - service.startKm);
+      if (summaryDistance === undefined) {
+        cells += numberCell(`I${n}`, service.startKm);
+        cells += numberCell(`J${n}`, service.endKm);
+        cells += numberCell(`K${n}`, service.endKm - service.startKm);
+      } else {
+        cells += textCell(`I${n}`, "");
+        cells += textCell(`J${n}`, "");
+        cells += numberCell(`K${n}`, summaryDistance);
+      }
       cells += textCell(`L${n}`, notes);
       return `<row r="${n}">${cells}</row>`;
     }).join("");
