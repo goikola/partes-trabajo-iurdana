@@ -102,19 +102,16 @@
     const rowData = [];
     for (const record of records) {
       const extras = Array.isArray(record.services) ? record.services : (record.extraService ? [record.extraService] : []);
-      if (record.task === "Varios" && extras.length) {
-        const totalKm = extras.reduce((total, service) => total + (service.endKm - service.startKm), 0);
-        rowData.push({
-          record,
-          service: { vehicle: "", task: "Varios", startTime: record.startTime, endTime: record.endTime },
-          line: "RESUMEN",
-          notes: record.notes,
-          summaryDistance: totalKm
-        });
-        extras.forEach((service, index) => rowData.push({ record, service, line: index + 1, notes: "" }));
-      } else {
-        rowData.push({ record, service: record, line: 1, notes: record.notes });
-      }
+      const details = record.task === "Varios" && extras.length ? extras : [record];
+      const totalKm = details.reduce((total, service) => total + (service.endKm - service.startKm), 0);
+      rowData.push({
+        record,
+        service: { ...record, vehicle: "", startTime: record.startTime, endTime: record.endTime },
+        line: "RESUMEN",
+        notes: record.notes,
+        summaryDistance: totalKm
+      });
+      details.forEach((service, index) => rowData.push({ record, service, line: index + 1, notes: "" }));
     }
     const rows = rowData.map(({ record, service, line, notes, summaryDistance }, index) => {
       const n = index + 2;
