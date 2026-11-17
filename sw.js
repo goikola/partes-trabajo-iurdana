@@ -1,5 +1,5 @@
-const CACHE = "partes-erdella-iurdana-v7";
-const ASSETS = ["index.html?v=7", "styles.css?v=8", "data.js?v=3", "xlsx-export.js?v=9", "app.js?v=17", "manifest.webmanifest", "icon.svg"];
+const CACHE = "partes-erdella-iurdana-v8";
+const ASSETS = ["index.html?v=8", "styles.css?v=8", "data.js?v=3", "xlsx-export.js?v=9", "app.js?v=18", "manifest.webmanifest", "icon.svg"];
 self.addEventListener("install", event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener("activate", event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener("fetch", event => {
@@ -7,5 +7,5 @@ self.addEventListener("fetch", event => {
   if (new URL(event.request.url).origin !== self.location.origin) return;
   event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
     const copy = response.clone(); caches.open(CACHE).then(cache => cache.put(event.request, copy)); return response;
-  }).catch(() => caches.match("index.html?v=7"))));
+  }).catch(() => caches.match("index.html?v=8"))));
 });

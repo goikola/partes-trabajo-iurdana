@@ -3,6 +3,7 @@
   const STORAGE_KEY = "carnes-erdella-iurdana-partes-v1";
   const AUTH_KEY = "carnes-erdella-iurdana-autorizado-v1";
   const LAST_WORKER_KEY = "carnes-erdella-iurdana-ultimo-trabajador-v1";
+  const DRAFT_KEY = "carnes-erdella-iurdana-borrador-v1";
   const WORKERS_KEY = "carnes-erdella-iurdana-trabajadores-v1";
   const VEHICLES_KEY = "carnes-erdella-iurdana-camiones-v1";
   const ACCESS_USER = "erdella";
@@ -23,6 +24,7 @@
   let sharedVehicles = null;
   let catalogRefreshPromise = null;
   let lastCatalogRefresh = 0;
+  let restoringDraft = false;
 
   async function hashPassword(value) {
     const data = new TextEncoder().encode(value);
@@ -155,7 +157,8 @@
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   }
-  function resetForm() {
+  function resetForm(clearDraft = true) {
+    if (clearDraft) localStorage.removeItem(DRAFT_KEY);
     form.reset();
     fields.id.value = "";
     fields.date.value = todayLocal();
@@ -166,6 +169,58 @@
     $("formTitle").textContent = "Nueva jornada";
     $("formMessage").hidden = true;
     refreshCalculations();
+  }
+  function draftServiceLine(line) {
+    return {
+      vehicle: line.querySelector(".service-vehicle").value,
+      task: line.querySelector(".service-task").value,
+      taskOther: line.querySelector(".service-task-other").value,
+      startTime: line.querySelector(".service-start-time").value,
+      endTime: line.querySelector(".service-end-time").value,
+      startKm: line.querySelector(".service-start-km").value,
+      endKm: line.querySelector(".service-end-km").value
+    };
+  }
+  function saveDraft() {
+    if (restoringDraft) return;
+    const draft = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.value]));
+    draft.services = fields.task.value === "Varios" ? serviceLines().map(draftServiceLine) : [];
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  }
+  function restoreDraft() {
+    let draft;
+    try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY)); }
+    catch { return false; }
+    if (!draft || typeof draft !== "object") return false;
+    restoringDraft = true;
+    try {
+      form.reset();
+      fields.id.value = draft.id || "";
+      fields.date.value = draft.date || todayLocal();
+      fields.worker.value = draft.worker || "";
+      fields.task.value = TASK_OPTIONS.includes(draft.task) ? draft.task : "";
+      fields.taskOther.value = draft.taskOther || "";
+      fields.notes.value = draft.notes || "";
+      toggleTaskOther();
+      toggleMultipleService();
+      if (fields.task.value === "Varios") {
+        $("serviceLines").replaceChildren();
+        const services = Array.isArray(draft.services) ? draft.services : [];
+        if (services.length) services.forEach(createServiceLine); else createServiceLine();
+      } else {
+        fields.vehicle.value = draft.vehicle || "";
+        fields.startTime.value = draft.startTime || "";
+        fields.endTime.value = draft.endTime || "";
+        fields.startKm.value = draft.startKm ?? "";
+        fields.endKm.value = draft.endKm ?? "";
+      }
+      $("formTitle").textContent = fields.id.value ? "Editar jornada" : "Nueva jornada";
+      $("formMessage").hidden = true;
+      refreshCalculations();
+      return true;
+    } finally {
+      restoringDraft = false;
+    }
   }
   function fillWorkerSelect() {
     const selected = fields.worker.value || localStorage.getItem(LAST_WORKER_KEY) || "";
@@ -247,6 +302,7 @@
       if (!serviceLines().length && fields.task.value === "Varios") createServiceLine();
       renumberServiceLines();
       refreshCalculations();
+      saveDraft();
     });
     $("serviceLines").append(line);
     updateServiceTaskOther(line);
@@ -496,14 +552,16 @@
 
   initializeAccess();
   fillSelects();
-  resetForm();
+  if (!restoreDraft()) resetForm(false);
   renderRecords();
   refreshSharedCatalog(true);
   form.addEventListener("submit", saveRecord);
+  form.addEventListener("input", saveDraft);
+  form.addEventListener("change", saveDraft);
   $("newButton").addEventListener("click", resetForm);
   [fields.startTime, fields.endTime, fields.startKm, fields.endKm].forEach(el => el.addEventListener("input", refreshCalculations));
   fields.task.addEventListener("change", () => { toggleTaskOther(); toggleMultipleService(); });
-  $("addServiceLine").addEventListener("click", () => createServiceLine());
+  $("addServiceLine").addEventListener("click", () => { createServiceLine(); saveDraft(); });
   $("monthFilter").addEventListener("change", renderRecords);
   $("clearFilter").addEventListener("click", () => { $("monthFilter").value = ""; renderRecords(); });
   $("exportButton").addEventListener("click", exportExcel);
