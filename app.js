@@ -1,16 +1,28 @@
 (() => {
   "use strict";
   const STORAGE_KEY = "carnes-erdella-iurdana-partes-v1";
+  const STORAGE_BACKUP_KEY = "carnes-erdella-iurdana-partes-respaldo-v1";
   const AUTH_KEY = "carnes-erdella-iurdana-autorizado-v1";
   const LAST_WORKER_KEY = "carnes-erdella-iurdana-ultimo-trabajador-v1";
   const DRAFT_KEY = "carnes-erdella-iurdana-borrador-v1";
   const WORKERS_KEY = "carnes-erdella-iurdana-trabajadores-v1";
   const VEHICLES_KEY = "carnes-erdella-iurdana-camiones-v1";
+  const CLOUD_DEVICE_KEY = "carnes-erdella-iurdana-dispositivo-v1";
+  const CLOUD_DELETIONS_KEY = "carnes-erdella-iurdana-borrados-pendientes-v1";
   const ACCESS_USER = "erdella";
   const ACCESS_PASSWORD_HASH = "5d072f5b8512844dad19ed32b1dc199532ed39d55df6c081742a2affae583525";
   const ADMIN_USER = "iurdana";
   const ADMIN_PASSWORD_HASH = "4c3aada37cf7fd3819b2da502a15f78f7ce5a2ce6d584b630344ff00dffc74ac";
   const TASK_OPTIONS = ["Varios", "Eroski", "STEF", "Barroso", "Integra", "Recogidas", "Otros"];
+  const FIREBASE_CONFIG = {
+    apiKey: "AIzaSyBjT_49FR1Fxq6kuph4n8L2SGje1WxYxJs",
+    authDomain: "partes-trabajo-erdella.firebaseapp.com",
+    databaseURL: "https://partes-trabajo-erdella-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "partes-trabajo-erdella",
+    storageBucket: "partes-trabajo-erdella.firebasestorage.app",
+    messagingSenderId: "466779972722",
+    appId: "1:466779972722:web:14db41bbe079d869408eeb"
+  };
   const $ = (id) => document.getElementById(id);
   const form = $("workForm");
   const fields = {
@@ -25,6 +37,10 @@
   let catalogRefreshPromise = null;
   let lastCatalogRefresh = 0;
   let restoringDraft = false;
+  let cloudUser = null;
+  let cloudReadyPromise = null;
+  let draftSyncTimer = null;
+  let cloudSyncPromise = null;
 
   async function hashPassword(value) {
     const data = new TextEncoder().encode(value);
@@ -56,10 +72,172 @@
   }
 
   const readRecords = () => {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
-    catch { return []; }
+    for (const key of [STORAGE_KEY, STORAGE_BACKUP_KEY]) {
+      try {
+        const value = JSON.parse(localStorage.getItem(key));
+        if (Array.isArray(value)) return value;
+      } catch {}
+    }
+    return [];
   };
-  const writeRecords = (records) => localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+  function writeRecords(records) {
+    const serialized = JSON.stringify(records);
+    const previous = localStorage.getItem(STORAGE_KEY);
+    if (previous) localStorage.setItem(STORAGE_BACKUP_KEY, previous);
+    localStorage.setItem(STORAGE_KEY, serialized);
+    localStorage.setItem(STORAGE_BACKUP_KEY, serialized);
+  }
+
+  function setCloudStatus(text, error = false) {
+    const box = $("cloudStatus");
+    if (!box) return;
+    box.textContent = text;
+    box.style.background = error ? "#fff1cf" : "#dff3e4";
+    box.style.color = error ? "#704b00" : "#155d2c";
+  }
+
+  function cloudDeviceName() {
+    return localStorage.getItem(LAST_WORKER_KEY) || fields.worker.value || "Dispositivo sin identificar";
+  }
+  const cloudRecordKey = id => String(id).replace(/[.#$\[\]/]/g, "_");
+  function pendingCloudDeletions() {
+    try { return JSON.parse(localStorage.getItem(CLOUD_DELETIONS_KEY)) || []; }
+    catch { return []; }
+  }
+  function rememberCloudDeletion(id) {
+    localStorage.setItem(CLOUD_DELETIONS_KEY, JSON.stringify([...new Set([...pendingCloudDeletions(), id])]));
+  }
+  function initializeCloudSync() {
+    if (cloudReadyPromise) return cloudReadyPromise;
+    cloudReadyPromise = new Promise(resolve => {
+      if (!window.firebase?.auth || !window.firebase?.database) { resolve(null); return; }
+      try {
+        const app = firebase.apps.length ? firebase.app() : firebase.initializeApp(FIREBASE_CONFIG);
+        const auth = app.auth();
+        auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
+        const stop = auth.onAuthStateChanged(async user => {
+          if (!user) {
+            try { await auth.signInAnonymously(); }
+            catch (error) { console.warn("No se pudo iniciar la sincronización.", error); resolve(null); }
+            return;
+          }
+          stop();
+          cloudUser = user;
+          localStorage.setItem(CLOUD_DEVICE_KEY, user.uid);
+          resolve(user);
+          syncExistingRecords().catch(error => {
+            setCloudStatus("Guardado en el móvil. La copia en la nube está pendiente.", true);
+            console.warn("La copia en la nube está pendiente.", error);
+          });
+        }, error => {
+          console.warn("No se pudo iniciar la sincronización.", error);
+          resolve(null);
+        });
+      } catch (error) {
+        console.warn("La sincronización no está disponible.", error);
+        resolve(null);
+      }
+    });
+    return cloudReadyPromise;
+  }
+  async function updateCloudMetadata() {
+    const user = cloudUser || await initializeCloudSync();
+    if (!user) return false;
+    await firebase.database().ref(`iurdanaDevices/${user.uid}/metadata`).update({
+      name: cloudDeviceName(),
+      lastSeen: firebase.database.ServerValue.TIMESTAMP
+    });
+    return true;
+  }
+  async function syncRecord(record) {
+    const user = cloudUser || await initializeCloudSync();
+    if (!user) return false;
+    await firebase.database().ref(`iurdanaDevices/${user.uid}`).update({
+      [`records/${cloudRecordKey(record.id)}`]: record,
+      draft: null,
+      "metadata/name": record.worker || cloudDeviceName(),
+      "metadata/lastSeen": firebase.database.ServerValue.TIMESTAMP
+    });
+    return true;
+  }
+
+  async function syncDraft(draft) {
+    const user = cloudUser || await initializeCloudSync();
+    if (!user) return false;
+    await firebase.database().ref(`iurdanaDevices/${user.uid}`).update({
+      draft: { ...draft, savedAt: firebase.database.ServerValue.TIMESTAMP },
+      "metadata/name": draft.worker || cloudDeviceName(),
+      "metadata/lastSeen": firebase.database.ServerValue.TIMESTAMP
+    });
+    return true;
+  }
+
+  function scheduleDraftSync(draft) {
+    clearTimeout(draftSyncTimer);
+    draftSyncTimer = setTimeout(() => {
+      syncDraft(draft).catch(error => {
+        setCloudStatus("Borrador guardado en el móvil; copia en nube pendiente.", true);
+        console.warn("El borrador queda pendiente de sincronizar.", error);
+      });
+    }, 700);
+  }
+  async function removeCloudRecord(id) {
+    const user = cloudUser || await initializeCloudSync();
+    if (!user) return false;
+    await firebase.database().ref(`iurdanaDevices/${user.uid}/records/${cloudRecordKey(id)}`).remove();
+    localStorage.setItem(CLOUD_DELETIONS_KEY, JSON.stringify(pendingCloudDeletions().filter(item => item !== id)));
+    await updateCloudMetadata();
+    return true;
+  }
+  async function syncExistingRecords() {
+    if (cloudSyncPromise) return cloudSyncPromise;
+    cloudSyncPromise = (async () => {
+    const user = cloudUser || await initializeCloudSync();
+    if (!user) {
+      setCloudStatus("Guardado local activo. No se pudo conectar con la copia en la nube.", true);
+      return false;
+    }
+    setCloudStatus("Comprobando la copia de seguridad…");
+    const deviceRef = firebase.database().ref(`iurdanaDevices/${user.uid}`);
+    const snapshot = await deviceRef.once("value");
+    const remote = snapshot.val() || {};
+    const deleted = new Set(pendingCloudDeletions());
+    const merged = new Map();
+    const keepNewest = record => {
+      if (!record?.id || deleted.has(record.id)) return;
+      const previous = merged.get(record.id);
+      if (!previous || String(record.updatedAt || "") >= String(previous.updatedAt || "")) merged.set(record.id, record);
+    };
+    readRecords().forEach(keepNewest);
+    Object.values(remote.records || {}).forEach(keepNewest);
+    const mergedRecords = [...merged.values()];
+    writeRecords(mergedRecords);
+
+    if (!localStorage.getItem(DRAFT_KEY) && remote.draft && typeof remote.draft === "object") {
+      const { savedAt, ...remoteDraft } = remote.draft;
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(remoteDraft));
+      const formIsEmpty = !fields.task.value && !fields.startTime.value && !fields.endTime.value && !fields.startKm.value && !fields.endKm.value;
+      if (formIsEmpty) restoreDraft();
+    }
+    const updates = {};
+    for (const record of mergedRecords) updates[`records/${cloudRecordKey(record.id)}`] = record;
+    for (const id of pendingCloudDeletions()) updates[`records/${cloudRecordKey(id)}`] = null;
+    const localDraft = localStorage.getItem(DRAFT_KEY);
+    if (localDraft) {
+      try { updates.draft = { ...JSON.parse(localDraft), savedAt: firebase.database.ServerValue.TIMESTAMP }; }
+      catch {}
+    }
+    updates["metadata/name"] = cloudDeviceName();
+    updates["metadata/lastSeen"] = firebase.database.ServerValue.TIMESTAMP;
+    await deviceRef.update(updates);
+    localStorage.removeItem(CLOUD_DELETIONS_KEY);
+    renderRecords();
+    setCloudStatus("Copia de seguridad en la nube al día.");
+    return true;
+    })();
+    try { return await cloudSyncPromise; }
+    finally { cloudSyncPromise = null; }
+  }
   const normalizeWorker = (value) => String(value ?? "").trim().replace(/\s+/g, " ").toUpperCase();
   const normalizePlate = (value) => String(value ?? "").trim().replace(/\s+/g, "").toUpperCase();
   const normalizeWorkers = (workers) => [...new Set((Array.isArray(workers) ? workers : []).map(normalizeWorker).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
@@ -186,6 +364,7 @@
     const draft = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.value]));
     draft.services = fields.task.value === "Varios" ? serviceLines().map(draftServiceLine) : [];
     localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    scheduleDraftSync(draft);
   }
   function restoreDraft() {
     let draft;
@@ -425,7 +604,7 @@
     box.style.color = error ? "#8b1717" : "#155d2c";
     box.hidden = false;
   }
-  function saveRecord(event) {
+  async function saveRecord(event) {
     event.preventDefault();
     if (!form.reportValidity()) return;
     const record = currentRecord();
@@ -434,11 +613,26 @@
     const records = readRecords();
     const index = records.findIndex(item => item.id === record.id);
     if (index >= 0) records[index] = record; else records.push(record);
-    writeRecords(records);
+    try {
+      writeRecords(records);
+    } catch (error) {
+      showMessage("No se pudo guardar el parte en este móvil. No cierres la aplicación y vuelve a intentarlo.", true);
+      console.error("Falló el guardado local.", error);
+      return;
+    }
     localStorage.setItem(LAST_WORKER_KEY, record.worker);
     resetForm();
-    showMessage(index >= 0 ? "Parte actualizado correctamente." : "Parte guardado correctamente.");
     renderRecords();
+    showMessage(index >= 0 ? "Parte actualizado en el móvil. Copiando en la nube…" : "Parte guardado en el móvil. Copiando en la nube…");
+    try {
+      await syncRecord(record);
+      setCloudStatus("Copia de seguridad en la nube al día.");
+      showMessage(index >= 0 ? "Parte actualizado en el móvil y en la nube." : "Parte guardado en el móvil y en la nube.");
+    } catch (error) {
+      setCloudStatus("Guardado en el móvil. La copia en la nube está pendiente.", true);
+      showMessage("Parte guardado en el móvil. Se copiará en la nube al recuperar conexión.", true);
+      console.warn("El parte queda pendiente de sincronizar.", error);
+    }
   }
   function editRecord(id) {
     const record = readRecords().find(item => item.id === id);
@@ -462,6 +656,8 @@
   function deleteRecord(id) {
     if (!confirm("¿Eliminar este parte de trabajo?")) return;
     writeRecords(readRecords().filter(item => item.id !== id));
+    rememberCloudDeletion(id);
+    removeCloudRecord(id).catch(error => console.warn("La eliminación queda pendiente de sincronizar.", error));
     renderRecords();
   }
   async function shareRecord(id) {
@@ -551,6 +747,7 @@
   }
 
   initializeAccess();
+  initializeCloudSync();
   fillSelects();
   if (!restoreDraft()) resetForm(false);
   renderRecords();
@@ -650,10 +847,16 @@
     finally { $("resetVehiclesButton").disabled = false; }
   });
 
-  window.addEventListener("focus", () => refreshSharedCatalog());
-  window.addEventListener("pageshow", () => refreshSharedCatalog(true));
+  window.addEventListener("focus", () => { refreshSharedCatalog(); syncExistingRecords().catch(() => {}); });
+  window.addEventListener("pageshow", () => { refreshSharedCatalog(true); syncExistingRecords().catch(() => {}); });
+  window.addEventListener("online", () => syncExistingRecords().catch(() => {}));
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") refreshSharedCatalog();
+    if (document.visibilityState === "visible") {
+      refreshSharedCatalog();
+      syncExistingRecords().catch(() => {});
+    } else {
+      saveDraft();
+    }
   });
 
   window.addEventListener("beforeinstallprompt", event => {

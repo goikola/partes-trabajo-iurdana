@@ -3,7 +3,7 @@
   "short_name": "Partes Iurdana",
   "description": "Registro móvil de rutas, horas y kilómetros",
   "lang": "es",
-  "start_url": "./?v=8",
+  "start_url": "./?v=10",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",

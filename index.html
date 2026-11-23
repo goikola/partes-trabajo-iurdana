@@ -56,6 +56,8 @@
         <button id="newButton" class="text-button" type="button">Limpiar</button>
       </div>
 
+      <div id="cloudStatus" class="message" role="status">Comprobando la copia de seguridad…</div>
+
       <form id="workForm">
         <input id="recordId" type="hidden">
         <div class="form-grid">
@@ -290,8 +292,11 @@
     </article>
   </template>
 
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
   <script src="data.js?v=3"></script>
   <script src="xlsx-export.js?v=9"></script>
-  <script src="app.js?v=18"></script>
+  <script src="app.js?v=20"></script>
 </body>
 </html>
