@@ -859,13 +859,29 @@
     }
   });
 
+  const installButton = $("installButton");
+  installButton.hidden = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   window.addEventListener("beforeinstallprompt", event => {
-    event.preventDefault(); deferredInstallPrompt = event; $("installButton").hidden = false;
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    installButton.hidden = false;
   });
-  $("installButton").addEventListener("click", async () => {
-    if (!deferredInstallPrompt) return;
-    deferredInstallPrompt.prompt(); await deferredInstallPrompt.userChoice;
-    deferredInstallPrompt = null; $("installButton").hidden = true;
+  window.addEventListener("appinstalled", () => {
+    deferredInstallPrompt = null;
+    installButton.hidden = true;
+  });
+  installButton.addEventListener("click", async () => {
+    const prompt = deferredInstallPrompt;
+    deferredInstallPrompt = null;
+    if (prompt) {
+      try {
+        await prompt.prompt();
+        const choice = await prompt.userChoice;
+        if (choice.outcome === "accepted") installButton.hidden = true;
+        return;
+      } catch {}
+    }
+    alert("En Android, abre este enlace en Chrome. Pulsa ⋮, luego «Añadir a pantalla de inicio» y elige «Instalar» si aparece. Si solo ves «Crear acceso directo», puedes añadir un icono sin instalar la app.");
   });
   if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
 })();
